@@ -9,7 +9,7 @@ Google Cloud Logging Wrapper
 ```ctx := context.Background()
 backupLog := log.New(os.Stdout, "my-backup-log", log.LstdFlags|log.Lmicroseconds)
 
-cloudLogging := NewLogger(ctx, "my-project-id", "my-logging-name")
+cloudLogging := cloudlogging.NewLogger(ctx, "my-project-id", "my-logging-name")
 
 cloudLogging.Info("i am message from logger", "other_field", "iam value on other_field")
 result on Logging: 
