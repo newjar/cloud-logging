@@ -9,87 +9,82 @@ import (
 )
 
 type ILogger interface {
-	Error(string, ...string)
-	Warn(string, ...string)
-	Info(string, ...string)
-	Debug(string, ...string)
+	Error(string, map[string]string)
+	Warn(string, map[string]string)
+	Info(string, map[string]string)
+	Debug(string, map[string]string)
+	Close() error
 }
 
 type Logger struct {
 	systemCtx context.Context
 	logger    *logging.Logger
 	backup    *log.Logger
+	gcpClient *logging.Client
 }
 
-func NewLogger(ctx context.Context, projectID, loggerName string, backup *log.Logger, labels ...string) (ILogger, error) {
+func NewLogger(ctx context.Context, projectID, loggerName string, backup *log.Logger, labels map[string]string) (ILogger, error) {
 	client, err := logging.NewClient(ctx, fmt.Sprintf("projects/%s", projectID))
 	if err != nil {
-		return nil, err
-	}
-
-	n := (len(labels) + 1) / 2
-	if len(labels)%2 != 0 {
-		labels = append(labels, "MISSING")
-	}
-	commonLabels := make(map[string]string, n)
-	for i := 0; i < len(labels); i += 2 {
-		commonLabels[labels[i]] = labels[i+1]
+		backup.Printf("WARN: Failed to initialize Google Cloud Logging, falling back to backup logger. Error: %v", err)
+		return &Logger{
+			systemCtx: ctx,
+			logger:    nil,
+			backup:    backup,
+			gcpClient: nil,
+		}, nil
 	}
 
 	result := new(Logger)
 
-	logger := client.Logger(loggerName, logging.CommonLabels(commonLabels))
+	logger := client.Logger(loggerName, logging.CommonLabels(labels))
 
 	*result = Logger{
 		systemCtx: ctx,
 		logger:    logger,
 		backup:    backup,
+		gcpClient: client,
 	}
 
 	return result, nil
 }
 
-func payload(msg string, details ...string) map[string]string {
-	n := (len(details) + 1) / 2
-	if len(details)%2 != 0 {
-		details = append(details, "MISSING")
-	}
-	payload := make(map[string]string, n+1)
+func payload(msg string, details map[string]string) map[string]string {
+	payload := make(map[string]string, len(details)+1)
 	payload["msg"] = msg
-	for i := 0; i < len(details); i += 2 {
-		payload[details[i]] = details[i+1]
+	for k, v := range details {
+		payload[k] = v
 	}
-
 	return payload
 }
 
-func (l *Logger) log(severity logging.Severity, msg string, details ...string) {
-	data := payload(msg, details...)
+func (l *Logger) log(severity logging.Severity, msg string, details map[string]string) {
+	data := payload(msg, details)
 	entry := logging.Entry{
 		Payload:  data,
 		Severity: severity,
 	}
-	if isDone(l.systemCtx) {
+	if l.logger == nil || isDone(l.systemCtx) {
 		l.backup.Printf("%-10s: %v", severity.String(), data)
 	} else {
 		l.logger.Log(entry)
 	}
 }
 
-func (l *Logger) Error(msg string, details ...string) {
-	l.log(logging.Error, msg, details...)
+func (l *Logger) Error(msg string, details map[string]string) {
+	l.log(logging.Error, msg, details)
 }
 
-func (l *Logger) Warn(msg string, details ...string) {
-	l.log(logging.Warning, msg, details...)
+func (l *Logger) Warn(msg string, details map[string]string) {
+	l.log(logging.Warning, msg, details)
 }
 
-func (l *Logger) Info(msg string, details ...string) {
-	l.log(logging.Info, msg, details...)
+func (l *Logger) Info(msg string, details map[string]string) {
+	l.log(logging.Info, msg, details)
 }
 
-func (l *Logger) Debug(msg string, details ...string) {
-	l.log(logging.Debug, msg, details...)
+func (l *Logger) Debug(msg string, details map[string]string) {
+	l.log(logging.Debug, msg, details)
 }
 
 func isDone(ctx context.Context) bool {
@@ -99,4 +94,11 @@ func isDone(ctx context.Context) bool {
 	default:
 	}
 	return false
+}
+
+func (l *Logger) Close() error {
+	if l.gcpClient == nil {
+		return nil
+	}
+	return l.gcpClient.Close()
 }
